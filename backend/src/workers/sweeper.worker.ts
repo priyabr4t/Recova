@@ -40,7 +40,7 @@ export async function sweep(): Promise<number> {
     await decisionQueue.add(
       'decision',
       { caseId: id },
-      { jobId: `decision:${id}:${Date.now()}`, removeOnComplete: true },
+      { jobId: `decision-${id}-${Date.now()}`, removeOnComplete: true },
     )
   }
   if (claimed > 0) logger.info({ claimed, simNow: simNow.toISOString() }, 'sweeper claimed due cases')

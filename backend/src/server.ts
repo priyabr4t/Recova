@@ -8,6 +8,7 @@ import { simulationRouter } from './routes/simulation.js'
 import { recoveryRouter } from './routes/recovery.js'
 import { summaryRouter } from './routes/summary.js'
 import { healthRouter } from './routes/health.js'
+import { startWorkers } from './workers/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -35,6 +36,21 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(rootDir, 'dist-frontend', 'index.html'))
 })
 
-app.listen(env.PORT, () => {
+const stopWorkers = startWorkers()
+
+const server = app.listen(env.PORT, () => {
   logger.info(`recova api listening on :${env.PORT}`)
+})
+
+async function shutdown(signal: string): Promise<void> {
+  logger.info({ signal }, 'shutting down')
+  server.close()
+  await stopWorkers()
+  process.exit(0)
+}
+process.on('SIGINT', () => void shutdown('SIGINT'))
+process.on('SIGTERM', () => void shutdown('SIGTERM'))
+// Last-resort net: a failed request must never take the whole demo down.
+process.on('unhandledRejection', (err) => {
+  logger.error({ err: String(err) }, 'unhandled rejection — request failed, server stays up')
 })

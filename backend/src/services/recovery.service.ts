@@ -45,12 +45,24 @@ export async function ingestWebhookEvent(event: WebhookEvent): Promise<{ created
     return { created: false }
   }
 
-  const payment = await prisma.payment.create({
-    data: {
+  // Upsert, not create: the seeded batch already carries attempt-1 Payment rows,
+  // and a replayed webhook must never violate the razorpayPaymentId unique key.
+  const payment = await prisma.payment.upsert({
+    where: { razorpayPaymentId: p.id },
+    create: {
       razorpayPaymentId: p.id,
       invoiceId: invoice.id,
       recoveryCaseId: invoice.recoveryCase?.id ?? null,
       attemptNo: (invoice.recoveryCase?.attemptCount ?? 0) + 1,
+      amountPaise: BigInt(p.amount),
+      status: 'FAILED',
+      errorCode: p.error_code,
+      errorDescription: p.error_description,
+      failedAt: p.failed_at ? new Date(p.failed_at) : null,
+    },
+    update: {
+      invoiceId: invoice.id,
+      recoveryCaseId: invoice.recoveryCase?.id ?? null,
       amountPaise: BigInt(p.amount),
       status: 'FAILED',
       errorCode: p.error_code,
@@ -92,12 +104,12 @@ export async function ingestWebhookEvent(event: WebhookEvent): Promise<{ created
   })
   await audit(created.id, 'SYSTEM', 'WEBHOOK_RECEIVED', { eventId: event.eventId })
   await audit(created.id, 'SYSTEM', 'CASE_CREATED', { invoiceNumber: invoice.invoiceNumber })
-  await classifyQueue.add('classify', { caseId: created.id }, { jobId: `classify:${created.id}` })
+  await classifyQueue.add('classify', { caseId: created.id }, { jobId: `classify-${created.id}` })
   return { created: true, caseId: created.id }
 }
 
 async function decisionRef(caseId: string): Promise<void> {
-  await classifyQueue.add('classify', { caseId }, { jobId: `classify:${caseId}:refail:${Date.now()}` })
+  await classifyQueue.add('classify', { caseId }, { jobId: `classify-${caseId}-refail-${Date.now()}` })
 }
 
 /** Claims and ingests every pending webhook event. This is the demo's START RECOVERY button. */
@@ -121,8 +133,10 @@ export async function startBatch(): Promise<{ claimed: number; casesCreated: num
 }
 
 export async function getCaseDetail(caseId: string) {
-  return prisma.recoveryCase.findUnique({
-    where: { id: caseId },
+  // Accepts either the Prisma id or the human case number (e.g. RCV-1003) —
+  // dashboard links use case numbers.
+  return prisma.recoveryCase.findFirst({
+    where: { OR: [{ id: caseId }, { caseNumber: caseId }] },
     include: {
       customer: true,
       invoice: true,

@@ -48,5 +48,5 @@ export async function processClassify(job: Job<{ caseId: string }>): Promise<voi
   })
   await audit(caseId, source === 'LLM' ? 'LLM' : 'SYSTEM', 'FAILURE_CLASSIFIED', { cause, source, confidence })
 
-  await decisionQueue.add('decision', { caseId }, { jobId: `decision:${caseId}:${Date.now()}`, removeOnComplete: true })
+  await decisionQueue.add('decision', { caseId }, { jobId: `decision-${caseId}-${Date.now()}`, removeOnComplete: true })
 }

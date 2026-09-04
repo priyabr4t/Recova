@@ -39,6 +39,15 @@ export default function DemoControls() {
     finally { setLoading(false) }
   }
 
+  const handleExportAudit = async () => {
+    setLoading(true); setResult('')
+    try {
+      await api.exportAuditCsv()
+      setResult('Audit trail exported as recova-audit-log.csv')
+    } catch (e: any) { setResult('Error: ' + e.message) }
+    finally { setLoading(false) }
+  }
+
   const isOk = invariants?.ok ?? null
 
   return (
@@ -109,6 +118,14 @@ export default function DemoControls() {
           className="w-full bg-zinc-800 border border-zinc-700 text-zinc-300 font-medium py-2 rounded-lg hover:bg-zinc-700 disabled:opacity-50 transition"
         >
           ↺ RESET SIMULATION
+        </button>
+
+        <button
+          onClick={handleExportAudit}
+          disabled={loading}
+          className="w-full bg-zinc-800 border border-zinc-700 text-zinc-300 font-medium py-2 rounded-lg hover:bg-zinc-700 disabled:opacity-50 transition"
+        >
+          ⬇ EXPORT AUDIT CSV
         </button>
       </section>
 

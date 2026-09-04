@@ -97,6 +97,12 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           generatedBy: draft.generatedBy,
         })
         const { recovered } = simulateEmailOutcome(kase.id, kase.cause)
+        // The outreach happened regardless of outcome — the contact counter and
+        // the false-contact metric depend on it.
+        await prisma.recoveryCase.update({
+          where: { id: kase.id },
+          data: { contactCount: kase.contactCount + 1 },
+        })
         await prisma.recoveryAction.update({
           where: { id: action.id },
           data: {
@@ -112,7 +118,6 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
         await prisma.recoveryCase.update({
           where: { id: kase.id },
           data: {
-            contactCount: kase.contactCount + 1,
             state: 'WAITING_SCHEDULE',
             nextActionAt: new Date(simNow.getTime() + 48 * 3600_000), // follow-up decision in 2 days
           },

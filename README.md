@@ -12,22 +12,31 @@ Autonomous, **bounded** AI revenue recovery agent — Razorpay /buildathon, Trac
 ## Quickstart
 
 ```bash
-# 1. Install dependencies
-cd backend && npm install && cd ../frontend && npm install
+# 0. Environment (first time only)
+cp .env.example .env                       # docker compose ports (defaults fine unless 5432/6379 are taken)
+cp backend/.env.example backend/.env       # API config
+# If you changed POSTGRES_PORT/REDIS_PORT above, keep DATABASE_URL/REDIS_URL
+# in backend/.env in sync.
 
-# 2. Start infrastructure
-cd backend && npm run db:up
+# 1. Install dependencies (workspaces: root + backend + frontend)
+npm install
 
-# 3. Push schema and seed
-cd backend && npm run db:push && npm run db:seed
+# 2. Start infrastructure (postgres + redis via docker compose)
+npm run db:up
 
-# 4. Start both processes
-npm run dev  # from root — concurrently starts API + frontend
+# 3. Push schema and seed 100 deterministic cases
+npm run db:push && npm run db:seed
 
-# Or separately:
-# Terminal 1: cd backend && npm run dev
-# Terminal 2: cd frontend && npm run dev
+# 4. Start API + frontend together
+npm run dev
 ```
+
+- API: `http://localhost:8080` (from `PORT` in `backend/.env`) — also serves the
+  built dashboard from `backend/dist-frontend` in production mode.
+- Frontend dev server: vite (5173, or the next free port) — proxies API routes
+  to the backend automatically.
+- No `OPENAI_API_KEY`? Everything still runs — deterministic fallbacks (error-code
+  table + template emails) take over. That's the offline demo mode.
 
 ## Endpoints
 
@@ -36,7 +45,8 @@ npm run dev  # from root — concurrently starts API + frontend
 | `POST /webhooks/razorpay` | Razorpay webhook ingestion |
 | `POST /recovery/start` | START RECOVERY button |
 | `GET /recovery/cases` | List cases |
-| `GET /recovery/cases/:id` | Case detail |
+| `GET /recovery/cases/:id` | Case detail (by id or case number) |
+| `GET /recovery/audit/export` | Full audit trail as CSV |
 | `GET /summary` | Dashboard numbers |
 | `GET /simulation/state` | Sim clock |
 | `POST /simulation/advance` | Fast-forward time |

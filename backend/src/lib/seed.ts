@@ -78,16 +78,19 @@ export async function seed(): Promise<void> {
     }
     if (i === 3) {
       cause = 'INSUFFICIENT_FUNDS'; errorCode = 'insufficient_fund'
-      // demo: high-value B2B invoice with a history of self-recovery → retry is right call
+      // demo: high-value B2B invoice with a history of self-recovery → retry is right call.
+      // Exactly ₹5L: at, not above, the auto-retry ceiling — so the retry path stays legal.
     }
     if (i === 4) {
       cause = 'EXPIRED_CARD'; errorCode = 'card_expired' // demo: email-first path
     }
 
     const isBig = i % 7 === 0
-    const amountPaise = isBig
-      ? BigInt(500_000 + Math.floor(rng() * 1_500_000)) * 100n // ₹5k–₹20L
-      : BigInt(500 + Math.floor(rng() * 19_500)) * 100n // ₹500–₹20k
+    const amountPaise = i === 3
+      ? 50_000_000n // ₹5,00,000 — the headline B2B fixture
+      : isBig
+        ? BigInt(500_000 + Math.floor(rng() * 1_500_000)) * 100n // ₹5k–₹20L
+        : BigInt(500 + Math.floor(rng() * 19_500)) * 100n // ₹500–₹20k
 
     const customer = await prisma.customer.create({
       data: {

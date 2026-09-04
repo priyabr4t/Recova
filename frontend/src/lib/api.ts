@@ -18,4 +18,15 @@ export const api = {
   resetSimulation: () => request<any>('/simulation/reset', { method: 'POST' }),
   getSimState: () => request<any>('/simulation/state'),
   getInvariants: () => request<any>('/health/invariants'),
+  exportAuditCsv: async (): Promise<void> => {
+    const res = await fetch(BASE + '/recovery/audit/export')
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'recova-audit-log.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 }
