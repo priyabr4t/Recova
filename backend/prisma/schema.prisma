@@ -1,0 +1,220 @@
+// Recova — recovery case data model.
+//
+// Key modeling decision (differs from the v1 draft): RecoveryCase links to the
+// INVOICE, not to a single failed payment. Every retry/failure creates a new
+// Payment row belonging to the case, so attempt history is real evidence in the
+// audit trail, not just a counter.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- enums ----------
+
+enum InvoiceStatus {
+  OUTSTANDING
+  PAID
+  WRITTEN_OFF
+}
+
+enum CaseState {
+  DIAGNOSING // failure received, LLM/table classifying cause
+  DECIDING // rules engine + LLM choosing intervention
+  ACTING // an action is queued/executing
+  WAITING_SCHEDULE // next action scheduled; sweeper will pick it up
+  RECOVERED // terminal
+  ESCALATED // terminal — handed to human with reason
+  WRITTEN_OFF // terminal — no action appropriate / customer exhausted
+}
+
+enum RecoveryCause {
+  INSUFFICIENT_FUNDS
+  EXPIRED_CARD
+  BANK_DECLINE
+  AUTHENTICATION_FAILED
+  NETWORK_ERROR
+  SUSPECTED_FRAUD
+  CUSTOMER_CHURN
+  UNKNOWN
+}
+
+enum CauseSource {
+  RULE_TABLE // deterministic error-code lookup
+  LLM // ambiguous — LLM classified
+  FALLBACK // both failed; conservative default
+}
+
+enum RecoveryActionType {
+  RETRY_PAYMENT
+  SEND_EMAIL
+  ESCALATE
+  NO_ACTION
+}
+
+enum ActionStatus {
+  PENDING
+  EXECUTING // claimed by action worker (conditional update)
+  SUCCESS
+  FAILED
+  BLOCKED // rules engine vetoed — never executed, kept for audit
+}
+
+enum ActorType {
+  SYSTEM
+  RULE_ENGINE
+  LLM
+  HUMAN
+}
+
+// ---------- sim clock ----------
+// Single row (id=1). DB is the authority for "now" so delayed jobs never
+// depend on BullMQ timers and time can be fast-forwarded during the demo.
+
+model SystemState {
+  id     Int      @id @default(1)
+  simNow DateTime
+}
+
+// ---------- money objects ----------
+
+model Customer {
+  id              String   @id @default(cuid())
+  name            String
+  email           String?
+  phone           String?
+  optedOut        Boolean  @default(false)
+  harassmentCount Int      @default(0) // customer told us to stop / complained
+  createdAt       DateTime @default(now())
+
+  invoices      Invoice[]
+  recoveryCases RecoveryCase[]
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  customerId    String
+  amountPaise   BigInt
+  currency      String        @default("INR")
+  dueDate       DateTime
+  status        InvoiceStatus @default(OUTSTANDING)
+  createdAt     DateTime      @default(now())
+
+  customer    Customer      @relation(fields: [customerId], references: [id])
+  recoveryCase RecoveryCase?
+  payments    Payment[]
+}
+
+// One row per payment attempt (original failure + every retry). Belongs to the case.
+model Payment {
+  id                String    @id @default(cuid())
+  razorpayPaymentId String?   @unique
+  invoiceId         String
+  recoveryCaseId    String?
+  attemptNo         Int       @default(1)
+  amountPaise       BigInt
+  status            String // FAILED | SUCCESS
+  errorCode         String?
+  errorDescription  String?
+  failedAt          DateTime?
+  createdAt         DateTime  @default(now())
+
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id])
+  recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id])
+
+  @@index([recoveryCaseId])
+}
+
+// ---------- recovery pipeline ----------
+
+model RecoveryCase {
+  id             String        @id @default(cuid())
+  caseNumber     String        @unique
+  customerId     String
+  invoiceId      String        @unique // one active case per invoice
+  state          CaseState     @default(DIAGNOSING)
+  cause          RecoveryCause?
+  causeConfidence Float?
+  causeSource    CauseSource?
+
+  attemptCount Int @default(0) // payment retries executed
+  contactCount Int @default(0) // outreach messages sent
+
+  amountPaise  BigInt
+  nextActionAt DateTime? // DB is source of truth; sweeper enqueues when due
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer Customer         @relation(fields: [customerId], references: [id])
+  invoice  Invoice          @relation(fields: [invoiceId], references: [id])
+  payments Payment[]
+  actions  RecoveryAction[]
+  ledger   RecoveryLedger?
+  auditLogs AuditLog[]
+
+  @@index([state, nextActionAt])
+}
+
+model RecoveryAction {
+  id             String             @id @default(cuid())
+  recoveryCaseId String
+  type           RecoveryActionType
+  status         ActionStatus       @default(PENDING)
+  reason         String? // LLM's stated reason (or fallback rule reason)
+  confidence     Float?
+  ruleDecision   Json? // what the rules engine allowed/blocked, verbatim
+  llmDecision    Json? // what the LLM suggested, verbatim
+  scheduledFor   DateTime?
+  executedAt     DateTime?
+  outcome        String?
+  error          String?
+  createdAt      DateTime           @default(now())
+
+  recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id])
+
+  @@index([recoveryCaseId])
+}
+
+// Append-only. Every state transition, actor-labeled. Exported as CSV in the demo.
+model AuditLog {
+  id             String    @id @default(cuid())
+  recoveryCaseId String?
+  actor          ActorType
+  event          String
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+
+  recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id])
+
+  @@index([recoveryCaseId])
+}
+
+// Per-case money accounting. ALL dashboard numbers are computed from here —
+// the LLM is never the source of truth for money.
+model RecoveryLedger {
+  id             String   @id @default(cuid())
+  recoveryCaseId String   @unique
+  atRiskPaise    BigInt   @default(0)
+  attemptedPaise BigInt   @default(0)
+  recoveredPaise BigInt   @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id])
+}
+
+// Webhook idempotency. Unique eventId; duplicates are acknowledged and skipped.
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  eventId     String    @unique
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
