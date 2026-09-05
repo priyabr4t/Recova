@@ -36,20 +36,20 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           where: { recoveryCaseId: kase.id },
           data: { attemptedPaise: { increment: kase.amountPaise } },
         })
-        const result = retryPayment(kase.id, kase.attemptCount + 1, kase.cause)
+        const result = retryPayment(kase.id, kase.attemptCount + 2, kase.cause)
         await prisma.payment.create({
           data: {
             razorpayPaymentId: result.providerPaymentId,
             invoiceId: kase.invoiceId,
             recoveryCaseId: kase.id,
-            attemptNo: kase.attemptCount + 1,
+            attemptNo: kase.attemptCount + 2, // attempt 1 = the original webhook failure
             amountPaise: kase.amountPaise,
             status: result.success ? 'SUCCESS' : 'FAILED',
             errorCode: result.errorCode,
           },
         })
         await audit(kase.id, 'SYSTEM', 'PAYMENT_RETRY_EXECUTED', {
-          attempt: kase.attemptCount + 1,
+          attempt: kase.attemptCount + 2,
           success: result.success,
         })
 
@@ -66,7 +66,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
         const exhausted = nextAttempt >= MAX_RETRIES
         await prisma.recoveryAction.update({
           where: { id: action.id },
-          data: { status: 'SUCCESS', executedAt: simNow, outcome: `RETRY_FAILED_${nextAttempt}` },
+          data: { status: 'SUCCESS', executedAt: simNow, outcome: `RETRY_FAILED_ATTEMPT_${kase.attemptCount + 2}` },
         })
         await prisma.recoveryCase.update({
           where: { id: kase.id },

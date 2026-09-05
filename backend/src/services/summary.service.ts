@@ -66,6 +66,8 @@ export async function getSummary() {
       llmDecisions,
       escalations,
     },
+    // Full state distribution for the pipeline panel on the dashboard.
+    states: byState,
     recoveryByCause: [...byCause.entries()]
       .map(([cause, agg]) => ({
         cause,
