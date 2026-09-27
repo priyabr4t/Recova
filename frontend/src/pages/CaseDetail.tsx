@@ -1,13 +1,16 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, UserRound, Mail, Phone, ReceiptText, ShieldCheck, Bot,
+  ArrowLeft, ArrowUpRight, RefreshCcw, UserRound, Mail, Phone, ReceiptText, ShieldCheck, Bot,
   Scale, CheckCircle2, Ban, Wallet, IndianRupee, Landmark,
 } from 'lucide-react'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
+import { toast } from '../lib/toast'
 import { formatRupees, cn } from '../lib/utils'
 import { ACTION_META, ACTION_STATUS_META, ACTOR_META, CAUSE_META, metaFor } from '../lib/labels'
 import { Card, CardHeader, Badge, ActorBadge, StateBadge, CauseBadge, EmptyState } from '../components/ui'
+import { Button } from '@/components/ui/button'
 import { formatDateTime } from '../lib/labels'
 
 type CaseDetail = {
@@ -84,6 +87,8 @@ export default function CaseDetail() {
           <p className="text-xs text-zinc-500">invoice value at risk</p>
         </div>
       </div>
+
+      <HumanActions kaseId={kase.id} state={kase.state} caseNumber={kase.caseNumber} />
 
       {/* Facts row */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -294,5 +299,111 @@ function LedgerLine({ icon, label, value, tone = 'text-zinc-200' }: { icon: Reac
       <span className="flex items-center gap-1.5 text-zinc-500">{icon} {label}</span>
       <span className={cn('font-semibold', tone)}>{formatRupees(value)}</span>
     </div>
+  )
+}
+
+// ---------- human overrides ----------
+// HUMAN-actor actions: notes, escalation, write-off, re-decide. Always audited
+// with the HUMAN actor so the trail never confuses a person with the agent.
+
+const TERMINAL_STATES = ['RECOVERED', 'ESCALATED', 'WRITTEN_OFF']
+
+function HumanActions({ kaseId, state, caseNumber }: { kaseId: string; state: string; caseNumber: string }) {
+  const [note, setNote] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const terminal = TERMINAL_STATES.includes(state)
+
+  async function run(action: string, fn: () => Promise<unknown>, okMsg: string) {
+    setBusy(action)
+    try {
+      await fn()
+      toast.success(okMsg)
+      setNote('')
+      setReason('')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `${action} failed`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Human Actions"
+        subtitle="Overrides run as you, not the agent — every one lands in the audit trail with the HUMAN actor"
+      />
+      <div className="mt-4 space-y-4">
+        <div>
+          <label htmlFor="case-note" className="mb-1.5 block text-xs font-medium text-zinc-400">
+            Add a note to {caseNumber}
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="case-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. customer promised to update their card by Friday"
+              className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-violet-500/60 focus:outline-none"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null || !note.trim()}
+              onClick={() => run('note', () => api.addCaseNote(kaseId, note.trim()), 'Note added')}
+            >
+              Add note
+            </Button>
+          </div>
+        </div>
+
+        {!terminal && (
+          <div className="flex flex-wrap items-end gap-2 border-t border-zinc-800/60 pt-4">
+            <div className="min-w-56 flex-1">
+              <label htmlFor="case-reason" className="mb-1.5 block text-xs font-medium text-zinc-400">
+                Reason (required for overrides)
+              </label>
+              <input
+                id="case-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="why are you overriding the agent?"
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-violet-500/60 focus:outline-none"
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null || !reason.trim()}
+              onClick={() => run('escalate', () => api.escalateCase(kaseId, reason.trim()), 'Case escalated to a human owner')}
+            >
+              <ArrowUpRight className="h-3.5 w-3.5" /> Escalate
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null || !reason.trim()}
+              onClick={() => run('re-decide', () => api.redecideCase(kaseId, reason.trim()), 'Agent will re-decide this case')}
+            >
+              <RefreshCcw className="h-3.5 w-3.5" /> Re-decide
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={busy !== null || !reason.trim()}
+              onClick={() => run('write-off', () => api.writeOffCase(kaseId, reason.trim()), 'Case written off')}
+            >
+              <Ban className="h-3.5 w-3.5" /> Write off
+            </Button>
+          </div>
+        )}
+        {terminal && (
+          <p className="border-t border-zinc-800/60 pt-3 text-xs text-zinc-500">
+            This case is in a terminal state ({state.toLowerCase().replace('_', ' ')}) — no further overrides.
+          </p>
+        )}
+      </div>
+    </Card>
   )
 }

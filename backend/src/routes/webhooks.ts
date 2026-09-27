@@ -4,6 +4,7 @@ import type { Request, Response } from 'express'
 import { env } from '../lib/env.js'
 import { logger } from '../lib/logger.js'
 import { prisma } from '../lib/prisma.js'
+import { requireApiKey } from '../lib/auth.js'
 import { ingestWebhookEvent } from '../services/recovery.service.js'
 
 export const webhookRouter = Router()
@@ -11,11 +12,12 @@ export const webhookRouter = Router()
 /**
  * Razorpay webhook ingestion.
  *  - raw body required for HMAC verification (mounted before express.json()),
- *  - signature checked with timing-safe compare,
- *  - eventId unique ⇒ duplicates acknowledged and skipped (idempotent),
+ *  - org resolved from the Recova API key (x-api-key), signature checked with
+ *    timing-safe compare,
+ *  - (orgId, eventId) unique ⇒ duplicates acknowledged and skipped (idempotent),
  *  - 200 returned fast; processing is async via the queue.
  */
-webhookRouter.post('/razorpay', (req: Request, res: Response) => {
+webhookRouter.post('/razorpay', requireApiKey, (req: Request, res: Response) => {
   void (async () => {
     const raw = req.body as Buffer
 
@@ -43,11 +45,11 @@ webhookRouter.post('/razorpay', (req: Request, res: Response) => {
     }
     const eventId = req.header('x-razorpay-event-id') ?? `evt_${body.payload?.payment?.entity?.id ?? crypto.randomUUID()}`
 
-    // Idempotency gate: unique(eventId) + conditional claim.
+    // Idempotency gate: unique(orgId, eventId) + conditional claim.
     let event
     try {
       event = await prisma.webhookEvent.create({
-        data: { eventId, eventType: body.event ?? 'unknown', payload: body as object },
+        data: { orgId: req.auth!.orgId, eventId, eventType: body.event ?? 'unknown', payload: body as object },
       })
     } catch {
       logger.info({ eventId }, 'duplicate webhook — acknowledged, skipped')

@@ -24,8 +24,8 @@ npm install
 # 2. Start infrastructure (postgres + redis via docker compose)
 npm run db:up
 
-# 3. Push schema and seed 100 deterministic cases
-npm run db:push && npm run db:seed
+# 3. Apply migrations and seed 100 deterministic cases (+ demo login & webhook key)
+npm run db:migrate && npm run db:seed
 
 # 4. Start API + frontend together
 npm run dev
@@ -42,18 +42,29 @@ npm run dev
 
 | Route | Purpose |
 |---|---|
-| `POST /webhooks/razorpay` | Razorpay webhook ingestion |
-| `POST /recovery/start` | START RECOVERY button |
-| `GET /recovery/cases` | List cases |
-| `GET /recovery/cases/:id` | Case detail (by id or case number) |
-| `GET /recovery/audit/export` | Full audit trail as CSV |
-| `GET /summary` | Dashboard numbers |
-| `GET /simulation/state` | Sim clock |
-| `POST /simulation/advance` | Fast-forward time |
-| `POST /simulation/reset` | Deterministic reset |
-| `GET /health/invariants` | Limbo/stuck probe |
-| `GET /health` | Liveness |
+| `POST /webhooks/razorpay` | Razorpay webhook ingestion (per-org `x-api-key` + HMAC verify) |
+| `POST /auth/signup` / `login` / `logout` · `GET /auth/me` | Session auth (JWT httpOnly cookie) |
+| `POST /recovery/start` | START RECOVERY (plan-limit aware) |
+| `GET /recovery/cases` · `GET /recovery/cases/:id` | List cases / case detail (by id or case number) |
+| `POST /recovery/cases/:id/notes` · `/escalate` · `/write-off` · `/re-decide` | Human overrides (HUMAN actor, audited) |
+| `GET /recovery/audit` · `GET /recovery/audit/export` | Audit feed (filterable) / CSV export |
+| `GET /summary` | Dashboard numbers (ledger-computed, per org) |
+| `GET /billing` · `POST /billing/plan` | Usage vs plan limits; dev-mode plan switch |
+| `GET/PATCH /org` · `POST /org/invite` · `DELETE /org/members/:id` | Workspace + team |
+| `GET/POST/DELETE /org/keys` | Webhook API key management |
+| `GET/PUT /integrations` | Razorpay / email integration config (secrets write-only) |
+| `GET /simulation/state` · `POST /simulation/advance` · `POST /simulation/reset` | Demo controls (auth required) |
+| `GET /health/invariants` · `GET /health` | Limbo/stuck probe · liveness |
+
+## Product docs
+
+| Doc | What it is |
+|---|---|
+| [PRODUCT.md](./PRODUCT.md) | SaaS product vision, intention, current state, target architecture |
+| [TODO.md](./TODO.md) | Phased roadmap to the complete SaaS (auth/tenancy → polish → billing → integrations → hardening) |
+| [docs/FEATURES.md](./docs/FEATURES.md) | Feature-by-feature inventory with file references and status |
+| [CONTEXT.md](./CONTEXT.md) | Original hackathon design doc (preserved) |
 
 ## Full project plan
 
-See **[CONTEXT.md](./CONTEXT.md)**.
+See **[CONTEXT.md](./CONTEXT.md)** (hackathon era) and **[PRODUCT.md](./PRODUCT.md)** (SaaS era).

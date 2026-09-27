@@ -4,6 +4,9 @@
 // INVOICE, not to a single failed payment. Every retry/failure creates a new
 // Payment row belonging to the case, so attempt history is real evidence in the
 // audit trail, not just a counter.
+//
+// SaaS tenancy (Phase 1): every domain table carries orgId. Workers resolve
+// the org from the case row; API routes from the session/API key.
 
 generator client {
   provider = "prisma-client-js"
@@ -71,9 +74,91 @@ enum ActorType {
   HUMAN
 }
 
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// ---------- org / auth ----------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free") // Phase 3: stripe-managed plans
+  createdAt DateTime @default(now())
+
+  users         Membership[]
+  apiKeys       ApiKey[]
+  customers     Customer[]
+  invoices      Invoice[]
+  webhookEvents WebhookEvent[]
+  recoveryCases RecoveryCase[]
+  integration   OrgIntegration?
+}
+
+// Per-org integration credentials. Secrets are stored AES-256-GCM encrypted
+// (lib/crypto.ts); never returned by the API — only "configured or not".
+model OrgIntegration {
+  id                       String   @id @default(cuid())
+  orgId                    String   @unique
+  razorpayKeyIdEnc         String?
+  razorpayKeySecretEnc     String?
+  razorpayWebhookSecretEnc String?
+  livePayments             Boolean  @default(false) // false = seeded simulator decides outcomes
+  emailLive                Boolean  @default(false) // false = emails drafted + audited, never sent
+  emailFromName            String?
+  emailReplyTo             String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  orgs Membership[]
+}
+
+model Membership {
+  id     String  @id @default(cuid())
+  orgId  String
+  userId String
+  role   OrgRole @default(MEMBER)
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+
+  @@unique([orgId, userId])
+  @@index([userId])
+}
+
+// Webhook ingestion keys. The raw key is shown once at creation; only the
+// SHA-256 hash is stored. Format: rk_<prefix>_<secret>.
+model ApiKey {
+  id         String    @id @default(cuid())
+  orgId      String
+  prefix     String
+  hashedKey  String    @unique
+  label      String    @default("webhook")
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@index([orgId])
+}
+
 // ---------- sim clock ----------
 // Single row (id=1). DB is the authority for "now" so delayed jobs never
 // depend on BullMQ timers and time can be fast-forwarded during the demo.
+// Stays GLOBAL (not org-scoped): simulation is a demo feature.
 
 model SystemState {
   id     Int      @id @default(1)
@@ -84,6 +169,7 @@ model SystemState {
 
 model Customer {
   id              String   @id @default(cuid())
+  orgId           String
   name            String
   email           String?
   phone           String?
@@ -91,13 +177,17 @@ model Customer {
   harassmentCount Int      @default(0) // customer told us to stop / complained
   createdAt       DateTime @default(now())
 
+  org           Organization   @relation(fields: [orgId], references: [id])
   invoices      Invoice[]
   recoveryCases RecoveryCase[]
+
+  @@index([orgId])
 }
 
 model Invoice {
   id            String        @id @default(cuid())
-  invoiceNumber String        @unique
+  orgId         String
+  invoiceNumber String
   customerId    String
   amountPaise   BigInt
   currency      String        @default("INR")
@@ -105,15 +195,20 @@ model Invoice {
   status        InvoiceStatus @default(OUTSTANDING)
   createdAt     DateTime      @default(now())
 
-  customer    Customer      @relation(fields: [customerId], references: [id])
+  org          Organization  @relation(fields: [orgId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
   recoveryCase RecoveryCase?
-  payments    Payment[]
+  payments     Payment[]
+
+  @@unique([orgId, invoiceNumber])
+  @@index([orgId])
 }
 
 // One row per payment attempt (original failure + every retry). Belongs to the case.
 model Payment {
   id                String    @id @default(cuid())
-  razorpayPaymentId String?   @unique
+  orgId             String
+  razorpayPaymentId String?
   invoiceId         String
   recoveryCaseId    String?
   attemptNo         Int       @default(1)
@@ -124,23 +219,26 @@ model Payment {
   failedAt          DateTime?
   createdAt         DateTime  @default(now())
 
-  invoice     Invoice      @relation(fields: [invoiceId], references: [id])
+  invoice      Invoice       @relation(fields: [invoiceId], references: [id])
   recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id])
 
+  @@unique([orgId, razorpayPaymentId])
+  @@index([orgId])
   @@index([recoveryCaseId])
 }
 
 // ---------- recovery pipeline ----------
 
 model RecoveryCase {
-  id             String        @id @default(cuid())
-  caseNumber     String        @unique
-  customerId     String
-  invoiceId      String        @unique // one active case per invoice
-  state          CaseState     @default(DIAGNOSING)
-  cause          RecoveryCause?
+  id              String         @id @default(cuid())
+  orgId           String
+  caseNumber      String
+  customerId      String
+  invoiceId       String         @unique // one active case per invoice
+  state           CaseState      @default(DIAGNOSING)
+  cause           RecoveryCause?
   causeConfidence Float?
-  causeSource    CauseSource?
+  causeSource     CauseSource?
 
   attemptCount Int @default(0) // payment retries executed
   contactCount Int @default(0) // outreach messages sent
@@ -151,18 +249,22 @@ model RecoveryCase {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  customer Customer         @relation(fields: [customerId], references: [id])
-  invoice  Invoice          @relation(fields: [invoiceId], references: [id])
-  payments Payment[]
-  actions  RecoveryAction[]
-  ledger   RecoveryLedger?
+  org       Organization    @relation(fields: [orgId], references: [id])
+  customer  Customer        @relation(fields: [customerId], references: [id])
+  invoice   Invoice         @relation(fields: [invoiceId], references: [id])
+  payments  Payment[]
+  actions   RecoveryAction[]
+  ledger    RecoveryLedger?
   auditLogs AuditLog[]
 
+  @@unique([orgId, caseNumber])
   @@index([state, nextActionAt])
+  @@index([orgId])
 }
 
 model RecoveryAction {
   id             String             @id @default(cuid())
+  orgId          String
   recoveryCaseId String
   type           RecoveryActionType
   status         ActionStatus       @default(PENDING)
@@ -178,12 +280,15 @@ model RecoveryAction {
 
   recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id])
 
+  @@index([orgId])
   @@index([recoveryCaseId])
 }
 
 // Append-only. Every state transition, actor-labeled. Exported as CSV in the demo.
+// orgId is nullable only for GLOBAL system events (sim clock advances).
 model AuditLog {
   id             String    @id @default(cuid())
+  orgId          String?
   recoveryCaseId String?
   actor          ActorType
   event          String
@@ -192,6 +297,7 @@ model AuditLog {
 
   recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id])
 
+  @@index([orgId])
   @@index([recoveryCaseId])
 }
 
@@ -199,6 +305,7 @@ model AuditLog {
 // the LLM is never the source of truth for money.
 model RecoveryLedger {
   id             String   @id @default(cuid())
+  orgId          String
   recoveryCaseId String   @unique
   atRiskPaise    BigInt   @default(0)
   attemptedPaise BigInt   @default(0)
@@ -207,14 +314,22 @@ model RecoveryLedger {
   updatedAt      DateTime @updatedAt
 
   recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id])
+
+  @@index([orgId])
 }
 
-// Webhook idempotency. Unique eventId; duplicates are acknowledged and skipped.
+// Webhook idempotency. Unique eventId per org; duplicates are acknowledged and skipped.
 model WebhookEvent {
   id          String    @id @default(cuid())
-  eventId     String    @unique
+  orgId       String
+  eventId     String
   eventType   String
   payload     Json
   processedAt DateTime?
   createdAt   DateTime  @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, eventId])
+  @@index([orgId])
 }

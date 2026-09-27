@@ -9,8 +9,8 @@ const TERMINAL_STATES = ['RECOVERED', 'ESCALATED', 'WRITTEN_OFF'] as const
  * never from LLM output. A judge clicking around must see the same story the
  * pitch slide tells.
  */
-export async function getSummary() {
-  const cases = await prisma.recoveryCase.findMany({ include: { ledger: true } })
+export async function getSummary(orgId: string) {
+  const cases = await prisma.recoveryCase.findMany({ where: { orgId }, include: { ledger: true } })
 
   let atRisk = 0n
   let recovered = 0n
@@ -36,13 +36,13 @@ export async function getSummary() {
   }
 
   const [ruleBlocks, llmDecisions, escalations] = await Promise.all([
-    prisma.recoveryAction.count({ where: { status: 'BLOCKED' } }),
-    prisma.recoveryAction.count({ where: { llmDecision: { not: Prisma.DbNull } } }),
-    prisma.recoveryCase.count({ where: { state: 'ESCALATED' } }),
+    prisma.recoveryAction.count({ where: { orgId, status: 'BLOCKED' } }),
+    prisma.recoveryAction.count({ where: { orgId, llmDecision: { not: Prisma.DbNull } } }),
+    prisma.recoveryCase.count({ where: { orgId, state: 'ESCALATED' } }),
   ])
 
   const exceptions = await prisma.recoveryCase.findMany({
-    where: { state: { in: ['ESCALATED', 'WRITTEN_OFF'] } },
+    where: { orgId, state: { in: ['ESCALATED', 'WRITTEN_OFF'] } },
     include: { invoice: true, customer: true },
     orderBy: { amountPaise: 'desc' },
     take: 10,

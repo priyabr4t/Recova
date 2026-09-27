@@ -19,6 +19,13 @@ const schema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().default(8000),
 
   SIM_SEED: z.coerce.number().default(42),
+
+  // ---- Auth / tenancy ----
+  AUTH_SECRET: z
+    .string()
+    .default('recova-dev-secret-change-me-in-production-0123456789'),
+  DEMO_USER_EMAIL: z.string().default('demo@recova.dev'),
+  DEMO_USER_PASSWORD: z.string().default('demo1234'),
 })
 
 const parsed = schema.safeParse(process.env)

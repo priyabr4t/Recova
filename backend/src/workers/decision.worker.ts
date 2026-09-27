@@ -107,6 +107,7 @@ export async function processDecision(job: Job<{ caseId: string }>): Promise<voi
   if (blockedRow && (Object.values(RecoveryActionType) as string[]).includes(blockedRow.action)) {
     await prisma.recoveryAction.create({
       data: {
+        orgId: kase.orgId,
         recoveryCaseId: caseId,
         type: blockedRow.action as RecoveryActionType,
         status: 'BLOCKED',
@@ -120,6 +121,7 @@ export async function processDecision(job: Job<{ caseId: string }>): Promise<voi
 
   const action = await prisma.recoveryAction.create({
     data: {
+      orgId: kase.orgId,
       recoveryCaseId: caseId,
       type: RecoveryActionType[finalAction],
       status: 'PENDING',
@@ -130,8 +132,9 @@ export async function processDecision(job: Job<{ caseId: string }>): Promise<voi
     },
   })
 
-  await audit(caseId, 'RULE_ENGINE', 'RULES_CHECKED', ruleDecisionJson)
+  await audit(kase.orgId, caseId, 'RULE_ENGINE', 'RULES_CHECKED', ruleDecisionJson)
   await audit(
+    kase.orgId,
     caseId,
     llmDecision ? 'LLM' : 'SYSTEM',
     blockedRow ? 'DECISION_BLOCKED_BY_RULES' : 'DECISION_GENERATED',
@@ -150,7 +153,7 @@ export async function processDecision(job: Job<{ caseId: string }>): Promise<voi
         where: { id: caseId },
         data: { state: 'WAITING_SCHEDULE', nextActionAt: contactableAt },
       })
-      await audit(caseId, 'RULE_ENGINE', 'QUIET_HOURS_DEFERRED', {
+      await audit(kase.orgId, caseId, 'RULE_ENGINE', 'QUIET_HOURS_DEFERRED', {
         resumesAt: contactableAt.toISOString(),
       })
       return

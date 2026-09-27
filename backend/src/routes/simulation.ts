@@ -2,8 +2,11 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { getSimNow, advanceDays } from '../services/simclock.service.js'
 import { resetData, seed } from '../lib/seed.js'
+import { requireAuth } from '../lib/auth.js'
 
 export const simulationRouter = Router()
+
+simulationRouter.use(requireAuth)
 
 simulationRouter.get('/state', async (_req, res) => {
   res.json({ simNow: await getSimNow() })

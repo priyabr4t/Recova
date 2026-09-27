@@ -2,13 +2,20 @@
 // patterns + edge-case fixtures the demo clicks on. Deterministic (seeded RNG,
 // fixed base date) so every demo run is reproducible.
 //
+// SaaS: all demo data belongs to the demo org; the demo user's session and the
+// webhook API key are created here too (users/orgs survive a simulation reset).
+//
 // Run: npm run db:seed
 import { PrismaClient, RecoveryCause } from '@prisma/client'
 import { mulberry32, hashString } from './rng.js'
+import { hashPassword, generateApiKey } from '../lib/auth.js'
+import { env } from '../lib/env.js'
 
 export const prisma = new PrismaClient()
 
 const BASE_SIM_NOW = new Date('2026-09-01T06:30:00.000Z') // 12:00 IST — contactable hours
+
+export const DEMO_ORG_SLUG = 'recova-demo'
 
 const NAMES = [
   'Rahul Sharma', 'Priya Patel', 'Amit Kumar', 'Sneha Reddy', 'Vikram Singh',
@@ -53,9 +60,45 @@ function pickCause(rng: () => number): { cause: RecoveryCause; errorCode: string
   return { cause: 'UNKNOWN', errorCode: 'unknown_error' }
 }
 
+/** Demo org + user + webhook API key. Users/orgs are NEVER wiped by reset. */
+export async function ensureDemoOrg(): Promise<string> {
+  const org = await prisma.organization.upsert({
+    where: { slug: DEMO_ORG_SLUG },
+    update: {},
+    create: { name: 'Recova Demo Merchant', slug: DEMO_ORG_SLUG, plan: 'demo' },
+  })
+
+  const user = await prisma.user.upsert({
+    where: { email: env.DEMO_USER_EMAIL },
+    update: {},
+    create: {
+      email: env.DEMO_USER_EMAIL,
+      name: 'Demo Operator',
+      passwordHash: await hashPassword(env.DEMO_USER_PASSWORD),
+    },
+  })
+  await prisma.membership.upsert({
+    where: { orgId_userId: { orgId: org.id, userId: user.id } },
+    update: {},
+    create: { orgId: org.id, userId: user.id, role: 'OWNER' },
+  })
+
+  const keyCount = await prisma.apiKey.count({ where: { orgId: org.id } })
+  if (keyCount === 0) {
+    const key = generateApiKey()
+    await prisma.apiKey.create({
+      data: { orgId: org.id, prefix: key.prefix, hashedKey: key.hashedKey, label: 'demo webhook key' },
+    })
+    console.log(`\n  webhook API key (shown once): ${key.raw}\n`)
+  }
+
+  return org.id
+}
+
 export async function seed(): Promise<void> {
   const rng = mulberry32(42)
   await resetData()
+  const orgId = await ensureDemoOrg()
 
   await prisma.systemState.create({ data: { id: 1, simNow: BASE_SIM_NOW } })
 
@@ -94,6 +137,7 @@ export async function seed(): Promise<void> {
 
     const customer = await prisma.customer.create({
       data: {
+        orgId,
         name: NAMES[i % NAMES.length]! + (i >= NAMES.length ? ` ${Math.floor(i / NAMES.length) + 1}` : ''),
         email: `customer${i}@example.com`,
         phone: `+9198${String(10000000 + i).slice(-8)}`,
@@ -104,6 +148,7 @@ export async function seed(): Promise<void> {
 
     const invoice = await prisma.invoice.create({
       data: {
+        orgId,
         invoiceNumber: `INV-${1000 + i}`,
         customerId: customer.id,
         amountPaise,
@@ -114,6 +159,7 @@ export async function seed(): Promise<void> {
 
     await prisma.payment.create({
       data: {
+        orgId,
         razorpayPaymentId: `pay_seed_${i}`,
         invoiceId: invoice.id,
         attemptNo: 1,
@@ -130,6 +176,7 @@ export async function seed(): Promise<void> {
       for (let h = 0; h < 3; h++) {
         await prisma.payment.create({
           data: {
+            orgId,
             razorpayPaymentId: `pay_hist_${i}_${h}`,
             invoiceId: invoice.id,
             attemptNo: 1,
@@ -144,6 +191,7 @@ export async function seed(): Promise<void> {
     // ingests them — that is the demo's "START RECOVERY" button.
     await prisma.webhookEvent.create({
       data: {
+        orgId,
         eventId: `evt_seed_${i}`,
         eventType: 'payment.failed',
         payload: {
@@ -170,11 +218,11 @@ export async function seed(): Promise<void> {
     invoices: await prisma.invoice.count(),
     webhookEvents: await prisma.webhookEvent.count(),
   }
-  console.log('seeded:', counts)
+  console.log('seeded:', counts, 'org:', DEMO_ORG_SLUG, 'user:', env.DEMO_USER_EMAIL)
 }
 
 export async function resetData(): Promise<void> {
-  // FK-safe order
+  // FK-safe order. Orgs/users/memberships/api keys survive — identity is not demo data.
   await prisma.auditLog.deleteMany()
   await prisma.recoveryAction.deleteMany()
   await prisma.recoveryLedger.deleteMany()

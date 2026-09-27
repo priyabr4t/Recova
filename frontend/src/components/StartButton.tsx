@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Play } from 'lucide-react'
-import { api } from '../lib/api'
+import { api, ApiError } from '../lib/api'
+import { toast } from '../lib/toast'
 import { cn } from '../lib/utils'
 
 /** Fires POST /recovery/start (the demo's headline button) with busy state. */
@@ -24,8 +25,19 @@ export default function StartButton({
         try {
           const r = await api.startRecovery()
           onStarted?.()
-          if ((r as { casesCreated?: number }).casesCreated) {
+          const created = (r as { casesCreated?: number }).casesCreated ?? 0
+          if (created > 0) {
+            toast.success(`${created} cases entered the pipeline`)
             navigate('/')
+          } else {
+            toast.info('Nothing to ingest — no unprocessed webhooks.')
+          }
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 402) {
+            toast.error(err.message)
+            navigate('/settings?tab=billing')
+          } else {
+            toast.error(err instanceof Error ? err.message : 'failed to start recovery')
           }
         } finally {
           setBusy(false)

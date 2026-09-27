@@ -1,21 +1,23 @@
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Wallet, IndianRupee, TrendingUp, Activity, ArrowUpRight, ShieldOff,
-  Bot, AlertTriangle, Search,
+  Bot, AlertTriangle, KeyRound, Plug, Users, Circle, CircleCheck, Loader2,
 } from 'lucide-react'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { formatRupees, formatPercent, cn } from '../lib/utils'
 import { CAUSE_META, PIPELINE_STATES, metaFor, STATE_META } from '../lib/labels'
 
-import { Card, CardHeader, StatCard, StateBadge, CauseBadge, Progress, EmptyState, PageLoading } from '../components/ui'
+import { Card, CardHeader, StatCard, StateBadge, CauseBadge, EmptyState, PageLoading } from '../components/ui'
 import StartButton from '../components/StartButton'
 
 type Summary = {
   money: { atRiskPaise: number; recoveredPaise: number; outstandingPaise: number; attemptedPaise: number; recoveryRate: number }
   counts: { totalCases: number; recovered: number; escalated: number; writtenOff: number; inFlight: number; ruleBlocks: number; llmDecisions: number; escalations: number }
   states: Record<string, number>
-  recoveryByCause: Array<{ cause: string; total: number; recovered: number; recoveryRate: number }>
+  recoveryByCause: Array<{ cause: string; total: number; recovered: number; recoveryRate: number; totalPaise?: number }>
   exceptions: Array<{ caseNumber: string; invoiceNumber: string; customer: string; amountPaise: number; state: string; cause: string | null; attempts: number }>
 }
 
@@ -27,23 +29,18 @@ export default function Dashboard() {
 
   const m = summary.money
   const c = summary.counts
-  const maxCauseTotal = Math.max(1, ...summary.recoveryByCause.map((d) => d.total))
+
+  const atRiskByCause = (summary.recoveryByCause ?? [])
+    .filter((d) => (d.totalPaise ?? 0) > 0)
+    .sort((a, b) => Number(b.totalPaise ?? 0n) - Number(a.totalPaise ?? 0n))
+    .map((d) => ({
+      name: metaFor(CAUSE_META, d.cause).label,
+      value: Number(d.totalPaise ?? 0n),
+    }))
 
   return (
     <div className="space-y-6">
-      {c.totalCases === 0 && (
-        <Card className="border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-indigo-500/5 to-transparent p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="text-base font-semibold text-white">No cases in the pipeline yet</h2>
-              <p className="mt-1 text-sm text-zinc-400">
-                100 failed payments are waiting as webhooks. Press START RECOVERY to let the agent loose.
-              </p>
-            </div>
-            <StartButton onStarted={refetch} />
-          </div>
-        </Card>
-      )}
+      {c.totalCases === 0 && <OnboardingChecklist onStarted={refetch} />}
 
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
@@ -61,36 +58,38 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        {/* Recovery by cause */}
+        {/* Money at risk by cause — donut */}
         <Card className="xl:col-span-2">
-          <CardHeader title="Recovery by Cause" subtitle="Volume (grey) and recovery rate (colour) per failure cause" />
-          <div className="space-y-4 p-5">
-            {summary.recoveryByCause.length === 0 && (
-              <EmptyState icon={<Search className="h-5 w-5" />} title="No classified causes yet" body="Start the recovery batch to populate this breakdown." />
-            )}
-            {summary.recoveryByCause.map((d) => {
-              const meta = metaFor(CAUSE_META, d.cause)
-              return (
-                <div key={d.cause} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-zinc-200">{meta.label}</span>
-                      <span className="text-xs tabular-nums text-zinc-500">{d.recovered}/{d.total} recovered</span>
-                    </div>
-                    <span className={cn(
-                      'text-xs font-semibold tabular-nums',
-                      d.recoveryRate >= 50 ? 'text-emerald-400' : d.recoveryRate > 0 ? 'text-amber-400' : 'text-zinc-500',
-                    )}>
-                      {d.recoveryRate}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1"><Progress value={(d.total / maxCauseTotal) * 100} tone="bg-zinc-700" /></div>
-                    <div className="w-24"><Progress value={d.recoveryRate} tone={d.recoveryRate >= 50 ? 'bg-emerald-500' : 'bg-amber-500'} /></div>
-                  </div>
+          <CardHeader title="Money at Risk by Cause" subtitle="Share of outstanding exposure per failure cause" />
+          <div className="flex flex-col items-center gap-4 p-5 sm:flex-row">
+            <div className="h-52 w-52 shrink-0">
+              {atRiskByCause.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-xs text-zinc-600">No data yet</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={atRiskByCause} dataKey="value" nameKey="name" innerRadius="58%" outerRadius="85%" paddingAngle={2} strokeWidth={0}>
+                      {atRiskByCause.map((entry, i) => (
+                        <Cell key={entry.name} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 }}
+                      formatter={(value: number | string) => formatRupees(Number(value))}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <div className="grid w-full grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {atRiskByCause.map((entry, i) => (
+                <div key={entry.name} className="flex items-center gap-2 text-xs">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                  <span className="min-w-0 flex-1 truncate text-zinc-300">{entry.name}</span>
+                  <span className="tabular-nums text-zinc-500">{formatRupees(entry.value)}</span>
                 </div>
-              )
-            })}
+              ))}
+            </div>
           </div>
         </Card>
 
@@ -179,6 +178,66 @@ function MiniStat({ icon, label, value, hint }: { icon: React.ReactNode; label: 
       <div className="min-w-0">
         <p className="text-sm font-semibold text-white tabular-nums">{value}</p>
         <p className="truncate text-xs text-zinc-500">{label} · {hint}</p>
+      </div>
+    </Card>
+  )
+}
+
+// ---------- onboarding (new workspaces) ----------
+
+const DONUT_COLORS = ['#8b5cf6', '#6366f1', '#22c55e', '#eab308', '#ef4444', '#3b82f6', '#14b8a6', '#71717a']
+
+function OnboardingChecklist({ onStarted }: { onStarted: () => void }) {
+  const [state, setState] = useState<{ keys: number; razorpayConfigured: boolean; members: number } | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [keys, integ, org] = await Promise.all([api.listKeys(), api.getIntegrations(), api.getOrg()])
+        setState({ keys: keys.length, razorpayConfigured: integ.razorpay.configured, members: org.members.length })
+      } catch {
+        setState({ keys: 0, razorpayConfigured: false, members: 1 })
+      }
+    })()
+  }, [])
+
+  const steps = [
+    { done: true, icon: <Plug className="h-4 w-4" />, title: 'Workspace created', to: null as string | null },
+    { done: (state?.keys ?? 0) > 0, icon: <KeyRound className="h-4 w-4" />, title: 'Create a webhook API key', to: '/settings?tab=keys' },
+    { done: state?.razorpayConfigured ?? false, icon: <Plug className="h-4 w-4" />, title: 'Connect Razorpay (optional — simulator until then)', to: '/settings?tab=integrations' },
+    { done: (state?.members ?? 1) > 1, icon: <Users className="h-4 w-4" />, title: 'Invite your team', to: '/settings?tab=team' },
+  ]
+  const remaining = steps.filter((s) => !s.done).length
+
+  return (
+    <Card className="border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-indigo-500/5 to-transparent p-6">
+      <div className="flex flex-wrap items-start justify-between gap-6">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold text-white">Welcome to Recova</h2>
+          <p className="mt-1 text-sm text-zinc-400">
+            Failed payments will land here as webhooks. Finish setup, or press START RECOVERY to load the demo batch.
+          </p>
+          <ul className="mt-4 space-y-2">
+            {steps.map((s) => (
+              <li key={s.title} className="flex items-center gap-2.5 text-sm">
+                <span className={s.done ? 'text-emerald-400' : 'text-zinc-600'}>
+                  {s.done ? <CircleCheck className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
+                </span>
+                <span className={s.done ? 'text-zinc-500 line-through' : 'text-zinc-200'}>{s.title}</span>
+                {!s.done && s.to && (
+                  <Link to={s.to} className="text-xs font-medium text-violet-400 hover:text-violet-300">→</Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          {state === null && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
+          <StartButton onStarted={onStarted} />
+          {remaining > 0 && (
+            <p className="text-[11px] text-zinc-600">{remaining} setup step{remaining > 1 ? 's' : ''} left</p>
+          )}
+        </div>
       </div>
     </Card>
   )

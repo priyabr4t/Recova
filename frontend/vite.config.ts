@@ -20,7 +20,7 @@ export default defineConfig({
     // The frontend calls these prefixes directly (no /api prefix in lib/api.ts),
     // so each API route family is proxied explicitly.
     proxy: Object.fromEntries(
-      ['/summary', '/recovery', '/simulation', '/health', '/webhooks'].map((p) => [
+      ['/auth', '/billing', '/org', '/integrations', '/summary', '/recovery', '/simulation', '/health', '/webhooks'].map((p) => [
         p,
         { target: `http://localhost:${apiPort}`, changeOrigin: true },
       ]),

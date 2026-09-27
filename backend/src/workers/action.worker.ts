@@ -6,6 +6,7 @@ import { audit } from '../services/audit.service.js'
 import { getSimNow } from '../services/simclock.service.js'
 import { retryPayment, simulateEmailOutcome } from '../services/razorpay-sim.service.js'
 import { draftEmail } from '../services/llm.service.js'
+import { getIntegration, sendEmailLive } from '../services/integrations.service.js'
 import { rupees } from '../lib/money.js'
 import { MAX_RETRIES, retryDelayHours } from '../services/rules.service.js'
 
@@ -39,6 +40,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
         const result = retryPayment(kase.id, kase.attemptCount + 2, kase.cause)
         await prisma.payment.create({
           data: {
+            orgId: kase.orgId,
             razorpayPaymentId: result.providerPaymentId,
             invoiceId: kase.invoiceId,
             recoveryCaseId: kase.id,
@@ -48,13 +50,13 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
             errorCode: result.errorCode,
           },
         })
-        await audit(kase.id, 'SYSTEM', 'PAYMENT_RETRY_EXECUTED', {
+        await audit(kase.orgId, kase.id, 'SYSTEM', 'PAYMENT_RETRY_EXECUTED', {
           attempt: kase.attemptCount + 2,
           success: result.success,
         })
 
         if (result.success) {
-          await settle(kase.id, kase.invoiceId, kase.amountPaise)
+          await settle(kase.orgId, kase.id, kase.invoiceId, kase.amountPaise)
           await prisma.recoveryAction.update({
             where: { id: action.id },
             data: { status: 'SUCCESS', executedAt: simNow, outcome: 'PAYMENT_RECOVERED' },
@@ -77,7 +79,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           },
         })
         if (exhausted) {
-          await audit(kase.id, 'RULE_ENGINE', 'RETRY_LIMIT_REACHED', { maxRetries: MAX_RETRIES })
+          await audit(kase.orgId, kase.id, 'RULE_ENGINE', 'RETRY_LIMIT_REACHED', { maxRetries: MAX_RETRIES })
         }
         return
       }
@@ -89,12 +91,21 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           amountPaise: kase.amountPaise,
           invoiceNumber: kase.invoice.invoiceNumber,
         })
-        // Demo mode: email is rendered + audited, not actually sent.
-        await audit(kase.id, 'SYSTEM', 'EMAIL_GENERATED', {
+        // The draft is ALWAYS audited (full email in the trail). When the org
+        // opted into live email and the provider is configured, it is also
+        // actually sent; otherwise this stays draft-only (demo mode).
+        const integ = await getIntegration(kase.orgId)
+        const send = await sendEmailLive(integ, {
+          to: kase.customer.email,
+          subject: draft.subject,
+          body: draft.body,
+        })
+        await audit(kase.orgId, kase.id, 'SYSTEM', send.sent ? 'EMAIL_SENT' : 'EMAIL_GENERATED', {
           to: kase.customer.email,
           subject: draft.subject,
           body: draft.body,
           generatedBy: draft.generatedBy,
+          ...(send.sent ? { providerId: send.providerId } : { sendSkipped: send.reason }),
         })
         const { recovered } = simulateEmailOutcome(kase.id, kase.cause)
         // The outreach happened regardless of outcome — the contact counter and
@@ -112,7 +123,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           },
         })
         if (recovered) {
-          await settle(kase.id, kase.invoiceId, kase.amountPaise)
+          await settle(kase.orgId, kase.id, kase.invoiceId, kase.amountPaise)
           return
         }
         await prisma.recoveryCase.update({
@@ -131,7 +142,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           where: { id: action.id },
           data: { status: 'SUCCESS', executedAt: simNow, outcome: 'ESCALATED_TO_HUMAN' },
         })
-        await audit(kase.id, 'SYSTEM', 'ESCALATED_TO_HUMAN', { reason: action.reason })
+        await audit(kase.orgId, kase.id, 'SYSTEM', 'ESCALATED_TO_HUMAN', { reason: action.reason })
         return
       }
 
@@ -142,7 +153,7 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
           where: { id: action.id },
           data: { status: 'SUCCESS', executedAt: simNow, outcome: 'NO_ACTION_APPROPRIATE' },
         })
-        await audit(kase.id, 'SYSTEM', 'CASE_WRITTEN_OFF', { reason: action.reason })
+        await audit(kase.orgId, kase.id, 'SYSTEM', 'CASE_WRITTEN_OFF', { reason: action.reason })
         return
       }
     }
@@ -158,16 +169,16 @@ export async function processAction(job: Job<{ actionId: string }>): Promise<voi
       where: { id: kase.id },
       data: { state: 'WAITING_SCHEDULE', nextActionAt: new Date(simNow.getTime() + 3600_000) },
     })
-    await audit(kase.id, 'SYSTEM', 'ACTION_FAILED_PARKED', { actionId: action.id })
+    await audit(kase.orgId, kase.id, 'SYSTEM', 'ACTION_FAILED_PARKED', { actionId: action.id })
   }
 }
 
-async function settle(caseId: string, invoiceId: string, amountPaise: bigint): Promise<void> {
+async function settle(orgId: string, caseId: string, invoiceId: string, amountPaise: bigint): Promise<void> {
   await prisma.recoveryCase.update({ where: { id: caseId }, data: { state: 'RECOVERED' } })
   await prisma.invoice.update({ where: { id: invoiceId }, data: { status: 'PAID' } })
   await prisma.recoveryLedger.update({
     where: { recoveryCaseId: caseId },
     data: { recoveredPaise: { increment: amountPaise } },
   })
-  await audit(caseId, 'SYSTEM', 'PAYMENT_RECOVERED', { amount: rupees(amountPaise) })
+  await audit(orgId, caseId, 'SYSTEM', 'PAYMENT_RECOVERED', { amount: rupees(amountPaise) })
 }

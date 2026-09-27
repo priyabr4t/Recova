@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* Theme tokens consumed by the shadcn-style primitives in components/ui/*.
+   Mapped onto the app's zinc/violet dark palette so primitives blend with
+   the hand-rolled ui.tsx components. */
+@theme inline {
+  --color-background: #09090b;
+  --color-foreground: #f4f4f5;
+  --color-popover: #18181b;
+  --color-popover-foreground: #f4f4f5;
+  --color-muted: #27272a;
+  --color-muted-foreground: #a1a1aa;
+  --color-input: #3f3f46;
+  --color-ring: #8b5cf6;
+  --color-destructive: #dc2626;
+}
+
 html {
   color-scheme: dark;
 }

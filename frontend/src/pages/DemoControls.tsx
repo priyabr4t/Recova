@@ -7,6 +7,9 @@ import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { formatRupees, cn } from '../lib/utils'
 import { Card, CardHeader } from '../components/ui'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { toast } from '../lib/toast'
 import { formatDateTime } from '../lib/labels'
 
 type Invariants = {
@@ -26,6 +29,7 @@ export default function DemoControls() {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmReset, setConfirmReset] = useState(false)
 
   const { data: simState } = usePolling(() => api.getSimState(), 3000)
   const { data: invariants } = usePolling<Invariants>(() => api.getInvariants(), 3000)
@@ -93,6 +97,7 @@ export default function DemoControls() {
                 onClick={() => run('advance', async () => {
                   await api.advanceDays(days)
                   setMessage(`Simulation advanced ${days} day${days > 1 ? 's' : ''}. Due cases have been released to the pipeline.`)
+                  toast.success(`Simulation advanced ${days} day${days > 1 ? 's' : ''}`)
                 })}
                 disabled={busy !== null}
                 className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-50"
@@ -147,6 +152,7 @@ export default function DemoControls() {
               onClick={() => run('export', async () => {
                 await api.exportAuditCsv()
                 setMessage('Audit trail downloaded as recova-audit-log.csv.')
+                toast.success('Audit CSV downloaded')
               })}
               disabled={busy !== null}
               className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-50"
@@ -155,13 +161,7 @@ export default function DemoControls() {
               {busy === 'export' ? 'Exporting…' : 'Export audit CSV'}
             </button>
             <button
-              onClick={() => {
-                if (!window.confirm('Reset the entire simulation? All cases are wiped and the deterministic seed is re-run.')) return
-                void run('reset', async () => {
-                  await api.resetSimulation()
-                  setMessage('Simulation reset. Press START RECOVERY for a fresh, reproducible run.')
-                })
-              }}
+              onClick={() => setConfirmReset(true)}
               disabled={busy !== null}
               className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-2.5 text-sm font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-50"
             >
@@ -187,6 +187,35 @@ export default function DemoControls() {
           </div>
         </Card>
       )}
+
+      {/* Reset confirmation */}
+      <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset the simulation?</DialogTitle>
+            <DialogDescription>
+              All cases, ledger entries and audit rows are wiped and the deterministic seed is re-run.
+              Your account and workspace are not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmReset(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmReset(false)
+                void run('reset', async () => {
+                  await api.resetSimulation()
+                  setMessage('Simulation reset. Press START RECOVERY for a fresh, reproducible run.')
+                  toast.success('Simulation reset to the deterministic seed')
+                })
+              }}
+            >
+              <RotateCcw className="h-4 w-4" /> Reset everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

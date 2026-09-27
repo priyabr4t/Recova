@@ -8,6 +8,11 @@ import { simulationRouter } from './routes/simulation.js'
 import { recoveryRouter } from './routes/recovery.js'
 import { summaryRouter } from './routes/summary.js'
 import { healthRouter } from './routes/health.js'
+import { authRouter } from './routes/auth.js'
+import { billingRouter } from './routes/billing.js'
+import { orgRouter } from './routes/org.js'
+import { integrationsRouter } from './routes/integrations.js'
+import { rateLimit } from './lib/rateLimit.js'
 import { startWorkers } from './workers/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -24,7 +29,13 @@ app.set('json replacer', (_key: string, value: unknown) =>
 app.use('/webhooks', express.raw({ type: '*/*', limit: '256kb' }), webhookRouter)
 
 app.use(express.json())
+// Light global limiter + strict limiter on credential endpoints.
+app.use(rateLimit({ windowMs: 60_000, max: 300, name: 'global' }))
 app.get('/health', (_req, res) => res.json({ ok: true }))
+app.use('/auth', authRouter)
+app.use('/billing', billingRouter)
+app.use('/org', orgRouter)
+app.use('/integrations', integrationsRouter)
 app.use('/simulation', simulationRouter)
 app.use('/recovery', recoveryRouter)
 app.use('/summary', summaryRouter)

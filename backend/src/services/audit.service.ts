@@ -5,21 +5,27 @@ import type { ActorType } from '@prisma/client'
 /**
  * Append-only audit. Every state transition lands here with its actor.
  * "Every money action explainable" — this table is the proof.
+ *
+ * Signature: audit(orgId, recoveryCaseId, actor, event, metadata?).
+ * orgId is null only for GLOBAL system events (sim clock), which never appear
+ * in a tenant's audit export.
  */
 export async function audit(
+  orgId: string | null,
   recoveryCaseId: string | null,
   actor: ActorType,
   event: string,
   metadata?: Prisma.InputJsonValue,
 ): Promise<void> {
   await prisma.auditLog.create({
-    data: { recoveryCaseId, actor, event, metadata },
+    data: { orgId, recoveryCaseId, actor, event, metadata },
   })
 }
 
-/** Full audit trail as CSV — the demo's "prove the numbers" artifact. */
-export async function buildAuditCsv(): Promise<string> {
+/** A tenant's audit trail as CSV — the "prove the numbers" artifact. */
+export async function buildAuditCsv(orgId: string): Promise<string> {
   const rows = await prisma.auditLog.findMany({
+    where: { orgId },
     orderBy: { createdAt: 'asc' },
     include: { recoveryCase: { select: { caseNumber: true } } },
   })

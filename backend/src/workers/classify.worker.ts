@@ -46,7 +46,7 @@ export async function processClassify(job: Job<{ caseId: string }>): Promise<voi
     where: { id: caseId },
     data: { cause, causeSource: source, causeConfidence: confidence, state: 'DECIDING' },
   })
-  await audit(caseId, source === 'LLM' ? 'LLM' : 'SYSTEM', 'FAILURE_CLASSIFIED', { cause, source, confidence })
+  await audit(kase.orgId, caseId, source === 'LLM' ? 'LLM' : 'SYSTEM', 'FAILURE_CLASSIFIED', { cause, source, confidence })
 
   await decisionQueue.add('decision', { caseId }, { jobId: `decision-${caseId}-${Date.now()}`, removeOnComplete: true })
 }

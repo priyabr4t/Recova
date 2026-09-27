@@ -24,6 +24,6 @@ export async function advanceDays(days: number): Promise<Date> {
   const simNow = await getSimNow()
   const next = new Date(simNow.getTime() + days * 24 * 60 * 60 * 1000)
   await prisma.systemState.update({ where: { id: 1 }, data: { simNow: next } })
-  await audit(null, 'SYSTEM', 'SIM_CLOCK_ADVANCED', { days, simNow: next.toISOString() })
+  await audit(null, null, 'SYSTEM', 'SIM_CLOCK_ADVANCED', { days, simNow: next.toISOString() })
   return next
 }
